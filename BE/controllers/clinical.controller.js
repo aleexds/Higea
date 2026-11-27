@@ -3,6 +3,20 @@
 const db = require('../models');
 const { AppError } = require('../middlewares/error.middleware');
 
+async function assertDoctorCanAccessPatient(user, patientId) {
+  if (user.roles.includes('admin')) return;
+  const assignment = await db.DoctorPatient.findOne({
+    where: { doctor_id: user.id, patient_id: patientId, status: 'active' },
+  });
+  if (!assignment) {
+    throw new AppError(
+      'Acceso denegado: este paciente no pertenece a su cartera asignada.',
+      403,
+      'PATIENT_NOT_ASSIGNED'
+    );
+  }
+}
+
 async function getMyPatients(req, res, next) {
   try {
     const isAdmin = req.user.roles.includes('admin');
@@ -42,6 +56,8 @@ async function getMyPatients(req, res, next) {
 
 async function getPatientDetail(req, res, next) {
   try {
+    await assertDoctorCanAccessPatient(req.user, Number(req.params.id));
+
     const patient = await db.Patient.findByPk(req.params.id, {
       include: [
         { model: db.User, as: 'user', attributes: ['id', 'full_name', 'email', 'cedula', 'phone'] },
@@ -67,9 +83,37 @@ async function getPatientDetail(req, res, next) {
   }
 }
 
+async function listReports(req, res, next) {
+  try {
+    const where = {};
+    if (req.query.status) where.status = req.query.status;
+    if (!req.user.roles.includes('admin')) {
+      where.doctor_id = req.user.id;
+    }
+
+    const reports = await db.DiagnosticReport.findAll({
+      where,
+      include: [
+        { model: db.DiagnosticStudy, as: 'study', attributes: ['id', 'title', 'modality', 'performed_at'] },
+        {
+          model: db.Patient,
+          as: 'patient',
+          include: [{ model: db.User, as: 'user', attributes: ['id', 'full_name', 'cedula'] }],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    return res.status(200).json({ success: true, data: reports });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function createClinicalOrder(req, res, next) {
   try {
     const { patient_id, order_type, title, description, priority } = req.body;
+    await assertDoctorCanAccessPatient(req.user, patient_id);
     const patient = await db.Patient.findByPk(patient_id);
     if (!patient) throw new AppError('Paciente no encontrado.', 404, 'PATIENT_NOT_FOUND');
 
@@ -93,6 +137,7 @@ async function createClinicalOrder(req, res, next) {
 async function createDiagnosticStudy(req, res, next) {
   try {
     const { order_id, patient_id, modality, title, file_url, metadata } = req.body;
+    await assertDoctorCanAccessPatient(req.user, patient_id);
     const patient = await db.Patient.findByPk(patient_id);
     if (!patient) throw new AppError('Paciente no encontrado.', 404, 'PATIENT_NOT_FOUND');
 
@@ -118,6 +163,7 @@ async function validateReport(req, res, next) {
   try {
     const report = await db.DiagnosticReport.findByPk(req.params.id);
     if (!report) throw new AppError('Reporte diagnóstico no encontrado.', 404, 'REPORT_NOT_FOUND');
+    await assertDoctorCanAccessPatient(req.user, report.patient_id);
 
     const { status, findings, conclusion, priority } = req.body;
     await report.update({
@@ -149,6 +195,7 @@ async function validateReport(req, res, next) {
 async function prescribeMedication(req, res, next) {
   try {
     const { patient_id, name, dosage, route, instructions, food_warnings, start_date, end_date, schedules } = req.body;
+    await assertDoctorCanAccessPatient(req.user, patient_id);
     const patient = await db.Patient.findByPk(patient_id);
     if (!patient) throw new AppError('Paciente no encontrado.', 404, 'PATIENT_NOT_FOUND');
 
@@ -293,6 +340,7 @@ async function createClinicalDocument(req, res, next) {
 module.exports = {
   getMyPatients,
   getPatientDetail,
+  listReports,
   createClinicalOrder,
   createDiagnosticStudy,
   validateReport,
@@ -302,4 +350,5 @@ module.exports = {
   updateAppointmentStatus,
   listClinicalDocuments,
   createClinicalDocument,
+  assertDoctorCanAccessPatient,
 };

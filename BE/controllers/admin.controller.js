@@ -1,9 +1,12 @@
 'use strict';
 
+const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const db = require('../models');
 const bccrService = require('../services/bccr.service');
 const { AppError } = require('../middlewares/error.middleware');
+
+const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
 
 async function getDashboardMetrics(req, res, next) {
   try {
@@ -184,6 +187,190 @@ async function getBccrHistory(req, res, next) {
   }
 }
 
+async function listRoles(req, res, next) {
+  try {
+    const roles = await db.Role.findAll({ order: [['id', 'ASC']] });
+    return res.status(200).json({ success: true, data: roles });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function listUsers(req, res, next) {
+  try {
+    const where = {};
+    if (req.query.status) where.status = req.query.status;
+    if (req.query.tenant_id) where.tenant_id = Number(req.query.tenant_id);
+
+    const users = await db.User.findAll({
+      where,
+      attributes: { exclude: ['password_hash', 'reset_token_hash', 'reset_token_expires_at'] },
+      include: [
+        { model: db.Role, as: 'roles', attributes: ['id', 'name'] },
+        { model: db.Tenant, as: 'tenant', attributes: ['id', 'name', 'slug'] },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+    return res.status(200).json({ success: true, data: users });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function createUser(req, res, next) {
+  try {
+    const { full_name, email, password, cedula, phone, specialty, license_number, tenant_id, roles } = req.body;
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existing = await db.User.findOne({ where: { email: normalizedEmail } });
+    if (existing) {
+      throw new AppError('Ya existe un usuario con ese correo electrónico.', 409, 'EMAIL_EXISTS');
+    }
+
+    const roleNames = Array.isArray(roles) && roles.length > 0 ? roles : ['doctor'];
+    const roleRecords = await db.Role.findAll({ where: { name: roleNames } });
+    if (roleRecords.length !== roleNames.length) {
+      throw new AppError('Uno o más roles especificados no existen.', 400, 'INVALID_ROLES');
+    }
+
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+    const createdUser = await db.sequelize.transaction(async (t) => {
+      const user = await db.User.create(
+        {
+          tenant_id: tenant_id || req.user.tenant_id || 1,
+          full_name: full_name.trim(),
+          email: normalizedEmail,
+          cedula: cedula || null,
+          phone: phone || null,
+          password_hash: passwordHash,
+          specialty: specialty || null,
+          license_number: license_number || null,
+          status: 'active',
+        },
+        { transaction: t }
+      );
+
+      await db.UserRole.bulkCreate(
+        roleRecords.map((r) => ({ user_id: user.id, role_id: r.id, assigned_at: new Date() })),
+        { transaction: t }
+      );
+
+      if (roleNames.includes('patient')) {
+        const mrn = `EXP-${new Date().getFullYear()}-${String(user.id).padStart(4, '0')}`;
+        await db.Patient.create(
+          {
+            user_id: user.id,
+            tenant_id: user.tenant_id,
+            medical_record_number: mrn,
+            clinical_status: 'stable',
+          },
+          { transaction: t }
+        );
+      }
+
+      return user;
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Usuario creado correctamente con sus roles asignados.',
+      data: {
+        id: createdUser.id,
+        full_name: createdUser.full_name,
+        email: createdUser.email,
+        tenant_id: createdUser.tenant_id,
+        roles: roleNames,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateUserRoles(req, res, next) {
+  try {
+    const user = await db.User.findByPk(req.params.id);
+    if (!user) throw new AppError('Usuario no encontrado.', 404, 'USER_NOT_FOUND');
+
+    const { roles } = req.body;
+    const roleRecords = await db.Role.findAll({ where: { name: roles } });
+    if (roleRecords.length !== roles.length) {
+      throw new AppError('Uno o más roles no son válidos.', 400, 'INVALID_ROLES');
+    }
+
+    await db.sequelize.transaction(async (t) => {
+      await db.UserRole.destroy({ where: { user_id: user.id }, transaction: t });
+      await db.UserRole.bulkCreate(
+        roleRecords.map((r) => ({ user_id: user.id, role_id: r.id, assigned_at: new Date() })),
+        { transaction: t }
+      );
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Roles actualizados correctamente.',
+      data: { user_id: user.id, roles },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateUserStatus(req, res, next) {
+  try {
+    const targetId = Number(req.params.id);
+    if (targetId === req.user.id && req.body.status !== 'active') {
+      throw new AppError('No puede desactivar su propia cuenta de administrador.', 400, 'SELF_DEACTIVATION_BLOCKED');
+    }
+
+    const user = await db.User.findByPk(targetId);
+    if (!user) throw new AppError('Usuario no encontrado.', 404, 'USER_NOT_FOUND');
+
+    await user.update({ status: req.body.status });
+    return res.status(200).json({
+      success: true,
+      data: { id: user.id, email: user.email, status: user.status },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function assignDoctorToPatient(req, res, next) {
+  try {
+    const { doctor_id, patient_id, is_primary } = req.body;
+    const [doctor, patient] = await Promise.all([
+      db.User.findByPk(doctor_id, { include: [{ model: db.Role, as: 'roles', attributes: ['name'] }] }),
+      db.Patient.findByPk(patient_id),
+    ]);
+
+    if (!doctor || !(doctor.roles || []).some((r) => r.name === 'doctor')) {
+      throw new AppError('El usuario seleccionado no tiene rol médico.', 400, 'INVALID_DOCTOR');
+    }
+    if (!patient) {
+      throw new AppError('Paciente no encontrado.', 404, 'PATIENT_NOT_FOUND');
+    }
+
+    const [assignment, created] = await db.DoctorPatient.findOrCreate({
+      where: { doctor_id: doctor.id, patient_id: patient.id },
+      defaults: { is_primary: is_primary !== undefined ? Boolean(is_primary) : true, status: 'active' },
+    });
+
+    if (!created) {
+      await assignment.update({ status: 'active', is_primary: is_primary !== undefined ? Boolean(is_primary) : assignment.is_primary });
+    }
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      message: 'Paciente asignado correctamente al médico.',
+      data: assignment,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   getDashboardMetrics,
   listTenants,
@@ -194,4 +381,10 @@ module.exports = {
   revokeApiKey,
   getBccrExchangeRate,
   getBccrHistory,
+  listRoles,
+  listUsers,
+  createUser,
+  updateUserRoles,
+  updateUserStatus,
+  assignDoctorToPatient,
 };

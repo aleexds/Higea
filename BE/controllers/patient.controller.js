@@ -123,10 +123,64 @@ async function requestAppointment(req, res, next) {
   }
 }
 
+async function getAvailableDoctors(req, res, next) {
+  try {
+    const patient = await findOwnPatient(req.user.id);
+    const doctors = await db.User.findAll({
+      where: {
+        status: 'active',
+        ...(patient.tenant_id ? { tenant_id: patient.tenant_id } : {}),
+      },
+      attributes: ['id', 'full_name', 'specialty', 'license_number'],
+      include: [
+        {
+          model: db.Role,
+          as: 'roles',
+          where: { name: 'doctor' },
+          attributes: [],
+          through: { attributes: [] },
+          required: true,
+        },
+      ],
+      order: [['full_name', 'ASC']],
+    });
+    return res.status(200).json({ success: true, data: doctors });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateOwnAppointment(req, res, next) {
+  try {
+    const patient = await findOwnPatient(req.user.id);
+    const appointment = await db.Appointment.findByPk(req.params.id);
+    if (!appointment || appointment.patient_id !== patient.id) {
+      throw new AppError('Cita no encontrada o no pertenece a su expediente.', 404, 'APPOINTMENT_NOT_FOUND');
+    }
+
+    const { scheduled_at, modality, status } = req.body;
+    await appointment.update({
+      ...(scheduled_at !== undefined ? { scheduled_at } : {}),
+      ...(modality !== undefined ? { modality } : {}),
+      ...(status !== undefined ? { status } : {}),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Cita actualizada correctamente.',
+      data: appointment,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   getPatientOverview,
   getApprovedReports,
   getMyMedications,
   getMyAppointments,
   requestAppointment,
+  getAvailableDoctors,
+  updateOwnAppointment,
 };

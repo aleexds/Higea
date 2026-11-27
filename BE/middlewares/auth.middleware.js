@@ -2,6 +2,30 @@
 
 const jwt = require('jsonwebtoken');
 
+// Lista de revocación en memoria (jti -> expMs) para invalidar tokens al cerrar sesión
+const revokedTokens = new Map();
+
+function revokeToken(jti, expSeconds) {
+  if (!jti) return;
+  const expiresAt = expSeconds ? expSeconds * 1000 : Date.now() + 8 * 60 * 60 * 1000;
+  revokedTokens.set(jti, expiresAt);
+}
+
+function isTokenRevoked(jti) {
+  if (!jti) return false;
+  const expiresAt = revokedTokens.get(jti);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) {
+    revokedTokens.delete(jti);
+    return false;
+  }
+  return true;
+}
+
+function clearRevokedTokens() {
+  revokedTokens.clear();
+}
+
 function authenticateJWT(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -22,11 +46,21 @@ function authenticateJWT(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, secret);
+    if (decoded.jti && isTokenRevoked(decoded.jti)) {
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_REVOKED',
+        message: 'La sesión fue cerrada. Inicie sesión nuevamente.',
+      });
+    }
+
     req.user = {
       id: decoded.sub,
       email: decoded.email,
       roles: Array.isArray(decoded.roles) ? decoded.roles : [],
       tenant_id: decoded.tenant_id ?? null,
+      jti: decoded.jti || null,
+      exp: decoded.exp || null,
     };
     return next();
   } catch (err) {
@@ -41,4 +75,9 @@ function authenticateJWT(req, res, next) {
   }
 }
 
-module.exports = { authenticateJWT };
+module.exports = {
+  authenticateJWT,
+  revokeToken,
+  isTokenRevoked,
+  clearRevokedTokens,
+};

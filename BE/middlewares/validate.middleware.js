@@ -4,6 +4,12 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 // Cédula física CR (1-1234-5678 o 9 dígitos) o DIMEX (11-12 dígitos) o jurídica (3-101-123456)
 const CEDULA_CR_REGEX = /^(\d-\d{4}-\d{4}|\d{9}|\d{11,12}|3-\d{3}-\d{6})$/;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+// Al menos 8 caracteres, 1 mayúscula, 1 minúscula, 1 número y 1 símbolo
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,100}$/;
+
+function isStrongPassword(value) {
+  return typeof value === 'string' && STRONG_PASSWORD_REGEX.test(value);
+}
 
 function isValidEmail(value) {
   return typeof value === 'string' && EMAIL_REGEX.test(value.trim());
@@ -85,6 +91,12 @@ function validateBody(schema) {
             message: `El campo '${field}' debe ser una fecha válida en formato ISO (YYYY-MM-DD).`,
           });
         }
+        if (rules.strongPassword && !isStrongPassword(value)) {
+          errors.push({
+            field,
+            message: `El campo '${field}' debe tener mínimo 8 caracteres, incluir mayúscula, minúscula, número y símbolo.`,
+          });
+        }
       }
 
       if (rules.enum && !rules.enum.includes(value)) {
@@ -134,4 +146,5 @@ module.exports = {
   isValidEmail,
   isValidCedulaCR,
   isValidDate,
+  isStrongPassword,
 };

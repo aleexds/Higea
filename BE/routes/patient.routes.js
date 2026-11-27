@@ -5,13 +5,14 @@ const router = express.Router();
 const patientController = require('../controllers/patient.controller');
 const { authenticateJWT } = require('../middlewares/auth.middleware');
 const { authorizeRoles } = require('../middlewares/role.middleware');
-const { validateBody } = require('../middlewares/validate.middleware');
+const { validateBody, validateIdParam } = require('../middlewares/validate.middleware');
 
 router.use(authenticateJWT, authorizeRoles('patient'));
 
 router.get('/overview', patientController.getPatientOverview);
 router.get('/reports', patientController.getApprovedReports);
 router.get('/medications', patientController.getMyMedications);
+router.get('/doctors', patientController.getAvailableDoctors);
 router.get('/appointments', patientController.getMyAppointments);
 
 router.post(
@@ -23,6 +24,17 @@ router.post(
     reason: { required: true, type: 'string', minLength: 3, maxLength: 255 },
   }),
   patientController.requestAppointment
+);
+
+router.patch(
+  '/appointments/:id',
+  validateIdParam('id'),
+  validateBody({
+    scheduled_at: { required: false, type: 'string', date: true },
+    modality: { required: false, type: 'string', enum: ['in_person', 'telehealth'] },
+    status: { required: false, type: 'string', enum: ['cancelled'] },
+  }),
+  patientController.updateOwnAppointment
 );
 
 module.exports = router;
