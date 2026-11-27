@@ -56,12 +56,14 @@ describe('Middlewares de Seguridad y Validación', () => {
 
       authenticateJWT(req, res, next);
       expect(next).toHaveBeenCalledTimes(1);
-      expect(req.user).toEqual({
-        id: 2,
-        email: 'elena.ramos@higea.cr',
-        roles: ['doctor'],
-        tenant_id: 1,
-      });
+      expect(req.user).toEqual(
+        expect.objectContaining({
+          id: 2,
+          email: 'elena.ramos@higea.cr',
+          roles: ['doctor'],
+          tenant_id: 1,
+        })
+      );
     });
   });
 

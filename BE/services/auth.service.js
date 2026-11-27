@@ -20,6 +20,7 @@ function signToken(user, roles) {
       email: user.email,
       roles,
       tenant_id: user.tenant_id || null,
+      jti: crypto.randomUUID(),
     },
     secret,
     { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
@@ -227,10 +228,33 @@ async function resetPassword({ email, token, new_password }) {
   return { message: 'Contraseña restablecida correctamente.' };
 }
 
+async function changePassword({ userId, current_password, new_password }) {
+  const user = await db.User.findByPk(userId);
+  if (!user || user.status !== 'active') {
+    throw new AppError('Usuario no encontrado o inactivo.', 404, 'USER_NOT_FOUND');
+  }
+
+  const valid = await bcrypt.compare(current_password, user.password_hash);
+  if (!valid) {
+    throw new AppError('La contraseña actual es incorrecta.', 401, 'INVALID_CURRENT_PASSWORD');
+  }
+
+  const sameAsOld = await bcrypt.compare(new_password, user.password_hash);
+  if (sameAsOld) {
+    throw new AppError('La nueva contraseña debe ser diferente a la actual.', 400, 'PASSWORD_REUSE');
+  }
+
+  const passwordHash = await bcrypt.hash(new_password, SALT_ROUNDS);
+  await user.update({ password_hash: passwordHash });
+
+  return { message: 'Contraseña actualizada correctamente.' };
+}
+
 module.exports = {
   register,
   login,
   requestPasswordReset,
   resetPassword,
+  changePassword,
   signToken,
 };

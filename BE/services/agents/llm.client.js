@@ -1,17 +1,25 @@
 'use strict';
 
 /**
- * Cliente unificado para proveedores de IA (Gemini / OpenAI) con timeout (RNF-06)
+ * Cliente unificado para proveedores de IA (DeepSeek / OpenAI / Gemini) con timeout (RNF-06)
  * y fallback determinístico estructurado cuando no hay API key configurada (RNF-08).
  */
 async function callLLM({ systemPrompt, userPrompt, fallbackBuilder }) {
-  const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
-  const model = process.env.AI_MODEL || (provider === 'openai' ? 'gpt-4o-mini' : 'gemini-2.0-flash');
+  const provider = (process.env.AI_PROVIDER || 'deepseek').toLowerCase();
+  const defaultModels = {
+    deepseek: 'deepseek-chat',
+    openai: 'gpt-4o-mini',
+    gemini: 'gemini-2.0-flash',
+  };
+  const model = process.env.AI_MODEL || defaultModels[provider] || 'deepseek-chat';
   const apiKey = process.env.AI_API_KEY;
   const timeoutMs = Number(process.env.AI_TIMEOUT_MS) || 15000;
 
   if (!apiKey || provider === 'mock') {
-    const fallback = typeof fallbackBuilder === 'function' ? fallbackBuilder() : { summary: 'Respuesta generada en modo clínico local.' };
+    const fallback =
+      typeof fallbackBuilder === 'function'
+        ? fallbackBuilder()
+        : { summary: 'Respuesta generada en modo clínico local.' };
     return {
       provider: 'local-clinical-engine',
       model: 'higea-deterministic-v1',
@@ -24,8 +32,14 @@ async function callLLM({ systemPrompt, userPrompt, fallbackBuilder }) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    if (provider === 'openai') {
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    if (provider === 'deepseek' || provider === 'openai') {
+      const endpoint =
+        process.env.AI_BASE_URL ||
+        (provider === 'deepseek'
+          ? 'https://api.deepseek.com/chat/completions'
+          : 'https://api.openai.com/v1/chat/completions');
+
+      const resp = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -43,14 +57,14 @@ async function callLLM({ systemPrompt, userPrompt, fallbackBuilder }) {
       });
 
       if (!resp.ok) {
-        throw new Error(`OpenAI HTTP ${resp.status}`);
+        throw new Error(`${provider.toUpperCase()} HTTP ${resp.status}`);
       }
       const data = await resp.json();
       const text = data.choices?.[0]?.message?.content || '';
       return { provider, model, content: { text }, usedFallback: false };
     }
 
-    // Default: Gemini REST API
+    // Gemini REST API
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const resp = await fetch(url, {
       method: 'POST',

@@ -11,6 +11,7 @@ router.use(authenticateJWT, authorizeRoles('doctor', 'admin'));
 
 router.get('/patients', clinicalController.getMyPatients);
 router.get('/patients/:id', validateIdParam('id'), clinicalController.getPatientDetail);
+router.get('/reports', clinicalController.listReports);
 
 router.post(
   '/orders',

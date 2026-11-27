@@ -2,6 +2,7 @@
 
 const db = require('../models');
 const authService = require('../services/auth.service');
+const { revokeToken } = require('../middlewares/auth.middleware');
 
 async function register(req, res, next) {
   try {
@@ -35,11 +36,29 @@ async function login(req, res, next) {
 }
 
 async function logout(req, res) {
-  // JWT stateless: el cliente descarta el token; se responde confirmación limpia
+  if (req.user?.jti) {
+    revokeToken(req.user.jti, req.user.exp);
+  }
   return res.status(200).json({
     success: true,
-    message: 'Sesión cerrada correctamente.',
+    message: 'Sesión cerrada y token revocado correctamente.',
   });
+}
+
+async function changePassword(req, res, next) {
+  try {
+    const data = await authService.changePassword({
+      userId: req.user.id,
+      current_password: req.body.current_password,
+      new_password: req.body.new_password,
+    });
+    if (req.user?.jti) {
+      revokeToken(req.user.jti, req.user.exp);
+    }
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    return next(err);
+  }
 }
 
 async function me(req, res, next) {
@@ -82,4 +101,5 @@ module.exports = {
   me,
   forgotPassword,
   resetPassword,
+  changePassword,
 };
