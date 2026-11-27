@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+BE/node_modules/
+FE/node_modules/
+
+# Environment variables (nunca subir credenciales reales)
+.env
+BE/.env
+FE/.env
+*.env.local
+
+# Logs & Coverage
+logs/
+*.log
+npm-debug.log*
+coverage/
+BE/coverage/
+
+# Build & OS
+dist/
+build/
+.DS_Store
+Thumbs.db
